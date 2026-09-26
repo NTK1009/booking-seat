@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="th">
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Booking Seat</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.577.0/dist/umd/lucide.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <script>
+  /* ============================================================
+     ตั้งค่าการเก็บข้อมูล (ใช้แทนระบบข้อมูลของ Canva)
+     - ปล่อยว่าง ""  = โหมดทดลอง ข้อมูลเก็บในเบราว์เซอร์เครื่องนี้เท่านั้น
+     - ใส่ลิงก์เว็บแอปของ Apps Script (ลงท้ายด้วย /exec)
+       = บันทึกลง Google ชีตจริง ทุกเครื่องเห็นข้อมูลชุดเดียวกัน
+     ============================================================ */
+  const SHEET_API_URL = "";
+
+  (function () {
+    const STORE_KEY = "booking-seat-records-v1";
+    const POLL_MS = 15000;
+    let handler = null, records = [];
+    const busy = new Set();
+    const remote = () => /^https:\/\//.test(SHEET_API_URL.trim());
+    const emit = () => { if (handler && typeof handler.onDataChanged === "function") handler.onDataChanged(records.map(r => ({ ...r }))); };
+    const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    function loadLocal() { try { const x = JSON.parse(localStorage.getItem(STORE_KEY) || "[]"); records = Array.isArray(x) ? x : []; } catch (e) { records = []; } }
+    function saveLocal() { try { localStorage.setItem(STORE_KEY, JSON.stringify(records)); return true; } catch (e) { return false; } }
+    async function pull() {
+      const url = SHEET_API_URL.trim();
+      const res = await fetch(url + (url.includes("?") ? "&" : "?") + "action=list&t=" + Date.now());
+      const data = await res.json();
+      if (!data || !data.ok) throw new Error((data && data.error) || "load_failed");
+      records = Array.isArray(data.records) ? data.records : [];
+      emit();
+    }
+    async function send(payload) {
+      const res = await fetch(SHEET_API_URL.trim(), { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload) });
+      const data = await res.json();
+      if (data && Array.isArray(data.records)) { records = data.records; emit(); }
+      return { isOk: !!(data && data.ok), error: data && data.error };
+    }
+    async function guarded(key, fn) {
+      if (busy.has(key)) return { isOk: false };
+      busy.add(key);
+      try { return await fn(); } catch (e) { return { isOk: false }; } finally { busy.delete(key); }
+    }
+    window.dataSdk = {
+      async init(h) {
+        handler = h;
+        if (!remote()) {
+          loadLocal(); emit();
+          window.addEventListener("storage", e => { if (e.key === STORE_KEY) { loadLocal(); emit(); } });
+          return { isOk: true };
+        }
+        try {
+          await pull();
+          setInterval(() => { if (document.visibilityState === "visible") pull().catch(() => {}); }, POLL_MS);
+          document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") pull().catch(() => {}); });
+          return { isOk: true };
+        } catch (e) { return { isOk: false }; }
+      },
+      create(rec) {
+        return guarded("create", async () => {
+          if (!remote()) { loadLocal(); records.push({ ...rec, __backendId: newId() }); const ok = saveLocal(); emit(); return { isOk: ok }; }
+          return send({ action: "create", record: rec });
+        });
+      },
+      update(rec) {
+        return guarded("u:" + rec.__backendId, async () => {
+          if (!remote()) { loadLocal(); const { photo_data, ...clean } = rec; const i = records.findIndex(r => r.__backendId === rec.__backendId); if (i < 0) return { isOk: false }; records[i] = clean; const ok = saveLocal(); emit(); return { isOk: ok }; }
+          return send({ action: "update", record: rec });
+        });
+      },
+      delete(rec) {
+        return guarded("d:" + rec.__backendId, async () => {
+          if (!remote()) { loadLocal(); records = records.filter(r => r.__backendId !== rec.__backendId); const ok = saveLocal(); emit(); return { isOk: ok }; }
+          return send({ action: "delete", id: rec.__backendId });
+        });
+      }
+    };
+  })();
+  </script>
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --navy:#082f49; --navy-2:#0c4a6e; --teal:#0f766e; --teal-soft:#dff6f2;
+      --amber:#f59e0b; --amber-ink:#422006; --ink:#102a43; --muted:#486581;
+      --surface:#ffffff; --mist:#f0f7f7; --line:#d8e5e7; --success:#15803d;
+      --danger:#be123c; --space-1:8px; --space-2:16px; --space-3:24px;
+      --space-4:32px; --space-5:40px; --radius:16px;
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{width:100%;margin:0;color:var(--ink);font-family:"Prompt",sans-serif;background:var(--mist)}
+    button,input,select{font:inherit}
+    .app-shell{width:100%;min-height:calc(100 * min(var(--vh,1vh),1vh))}
+    .screen{display:none}.screen.active{display:block;animation:enter .32s ease-out both}
+    @keyframes enter{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+    .page-pad{padding:var(--space-4) var(--space-2)}
+    .eyebrow{font-size:14px;font-weight:700;letter-spacing:.08em}
+    .page-title{font-size:30px;line-height:1.25;font-weight:800;letter-spacing:-.02em}
+    .body-copy{font-size:16px;line-height:1.65}
+    .input-field{width:100%;min-height:48px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;color:var(--ink);background:#fff;outline:none;transition:.18s ease}
+    .input-field:focus{border-color:var(--teal);box-shadow:0 0 0 3px rgba(15,118,110,.16)}
+    .btn{min-height:48px;border:0;border-radius:12px;padding:12px 20px;font-weight:700;cursor:pointer;transition:transform .18s ease,filter .18s ease,box-shadow .18s ease}
+    .btn:hover:not(:disabled){transform:translateY(-1px);filter:brightness(.97);box-shadow:0 8px 18px rgba(8,47,73,.12)}
+    .btn:focus-visible,.seat:focus-visible{outline:3px solid var(--amber);outline-offset:3px}
+    .btn:disabled{cursor:not-allowed;opacity:.55}
+    .btn-primary{background:var(--teal);color:#fff}.btn-accent{background:var(--amber);color:var(--amber-ink)}
+    .btn-secondary{background:#fff;color:var(--navy);border:1px solid var(--line)}
+    .hero-photo{filter:brightness(.42) saturate(.78)}
+    .hero-pattern{background-image:radial-gradient(rgba(255,255,255,.17) 1px,transparent 1px);background-size:18px 18px}
+    .seat-scroll::-webkit-scrollbar{height:8px}.seat-scroll::-webkit-scrollbar-thumb{background:#aac0c5;border-radius:20px}
+    .seat-grid{display:grid;grid-template-columns:repeat(20,34px);gap:6px}
+    .seat{width:34px;height:36px;border:1px solid #bdd0d4;border-radius:9px;background:#fff;color:#35536a;font-size:10px;font-weight:800;transition:.16s ease}
+    .seat.available:hover{border-color:var(--teal);background:var(--teal-soft);transform:translateY(-2px)}
+    .seat.reserved{border-color:#d7e0e2;background:#d7e0e2;color:#718096;cursor:not-allowed}
+    .seat.checked{border-color:#9fe0bd;background:#c7f4d7;color:#166534;cursor:not-allowed}
+    .seat.mine{border-color:var(--teal);background:var(--teal);color:#fff;cursor:not-allowed}
+    .seat.selected{border-color:var(--amber);background:var(--amber);color:var(--amber-ink);box-shadow:0 4px 12px rgba(245,158,11,.3)}
+    .row-label{display:flex;width:28px;height:36px;align-items:center;justify-content:center;color:#486581;font-size:13px;font-weight:800}
+    .status-message{min-height:24px}
+    .proof-preview img{width:100%;height:100%;object-fit:cover}
+    .count-ring{display:flex;width:150px;height:150px;flex-direction:column;align-items:center;justify-content:center;border:10px solid #b9ebe4;border-radius:50%}
+    .canva-button{border:none}.canva-panel{color:#fff}
+    @media(min-width:640px){.page-pad{padding:var(--space-5) var(--space-3)}.seat-grid{grid-template-columns:repeat(20,37px);gap:7px}.seat{width:37px;height:38px}.row-label{height:38px}.page-title{font-size:32px}}
+  </style>
+  <style>
+    /* ข้อความ สี และขนาดตัวอักษรที่ตั้งไว้ในหน้าออกแบบ Canva (เดิม Canva ใส่ให้ตอนเปิดเว็บ) */
+    [data-template-id="__page-root"]{background-color:#f0f7f7!important}
+    [data-template-id="back-label"]{font-size:16px!important;font-weight:700!important;color:#0c4a6e!important}
+    [data-template-id="back-seat-label"]{font-size:16px!important;font-weight:700!important;color:#0c4a6e!important}
+    [data-template-id="brand-name"]{font-size:16px!important;font-weight:800!important;color:#082f49!important}
+    [data-template-id="camera-button"]{color:#ffffff!important;background-color:#0f766e!important}
+    [data-template-id="camera-button-label"]{font-size:16px!important;font-weight:700!important;color:#ffffff!important}
+    [data-template-id="cancel-seat-button"]{font-size:16px!important;font-weight:700!important;color:#082f49!important;background-color:#ffffff!important}
+    [data-template-id="checkin-button"]{font-size:16px!important;font-weight:700!important;color:#ffffff!important;background-color:#0f766e!important}
+    [data-template-id="checkin-eyebrow"]{font-size:16px!important;font-weight:700!important;color:#0f766e!important;letter-spacing:0.08em!important}
+    [data-template-id="checkin-title"]{font-size:24px!important;font-weight:800!important;color:#082f49!important}
+    [data-template-id="confirm-seat-button"]{font-size:16px!important;font-weight:700!important;color:#422006!important;background-color:#f59e0b!important}
+    [data-template-id="course-label"]{font-size:16px!important;font-weight:700!important;color:#102a43!important}
+    [data-template-id="date-label"]{font-size:16px!important;font-weight:700!important;color:#102a43!important}
+    [data-template-id="edit-details-button"]{color:#0c4a6e!important;background-color:#ffffff!important}
+    [data-template-id="edit-details-label"]{font-size:16px!important;font-weight:700!important;color:#0c4a6e!important}
+    [data-template-id="end-label"]{font-size:16px!important;font-weight:700!important;color:#102a43!important}
+    [data-template-id="form-description"]{font-size:16px!important;font-weight:400!important;color:#486581!important;line-height:1.6!important}
+    [data-template-id="form-eyebrow"]{font-size:16px!important;font-weight:700!important;color:#0f766e!important;letter-spacing:0.08em!important}
+    [data-template-id="form-submit"]{color:#ffffff!important;background-color:#0f766e!important}
+    [data-template-id="form-submit-label"]{font-size:16px!important;font-weight:700!important;color:#ffffff!important}
+    [data-template-id="form-title"]{font-size:24px!important;font-weight:800!important;color:#082f49!important}
+    [data-template-id="go-checkin-button"]{font-size:16px!important;font-weight:700!important;color:#ffffff!important;background-color:#0f766e!important}
+    [data-template-id="header-section"]{background-color:rgba(255,255,255,0.96)!important}
+    [data-template-id="header-tag"]{font-size:16px!important;font-weight:700!important;color:#0f5f59!important;background-color:#dff6f2!important}
+    [data-template-id="hero-card"]{background-color:#ffffff!important}
+    [data-template-id="hero-card-label"]{font-size:16px!important;font-weight:700!important;color:#082f49!important}
+    [data-template-id="hero-card-note"]{font-size:16px!important;font-weight:400!important;color:#486581!important;line-height:1.5!important}
+    [data-template-id="hero-cta"]{color:#422006!important;background-color:#f59e0b!important}
+    [data-template-id="hero-cta-label"]{font-size:16px!important;font-weight:700!important;color:#422006!important}
+    [data-template-id="hero-description"]{font-size:16px!important;font-weight:400!important;color:#e1f5f2!important;line-height:1.65!important}
+    [data-template-id="hero-eyebrow"]{font-size:16px!important;font-weight:700!important;color:#c7f4d7!important;letter-spacing:0.12em!important}
+    [data-template-id="hero-title"]{font-size:32px!important;font-weight:800!important;color:#ffffff!important}
+    [data-template-id="legend-booked"]{font-size:16px!important;font-weight:700!important;color:#486581!important}
+    [data-template-id="legend-checked"]{font-size:16px!important;font-weight:700!important;color:#486581!important}
+    [data-template-id="legend-mine"]{font-size:16px!important;font-weight:700!important;color:#486581!important}
+    [data-template-id="legend-open"]{font-size:16px!important;font-weight:700!important;color:#486581!important}
+    [data-template-id="legend-selected"]{font-size:16px!important;font-weight:700!important;color:#486581!important}
+    [data-template-id="minutes-label"]{font-size:16px!important;font-weight:700!important;color:#ffffff!important}
+    [data-template-id="name-label"]{font-size:16px!important;font-weight:700!important;color:#102a43!important}
+    [data-template-id="prefix-label"]{font-size:16px!important;font-weight:700!important;color:#102a43!important}
+    [data-template-id="proof-label"]{font-size:16px!important;font-weight:700!important;color:#102a43!important}
+    [data-template-id="proof-upload-label"]{font-size:16px!important;font-weight:700!important;color:#102a43!important}
+    [data-template-id="proof-upload-note"]{font-size:16px!important;font-weight:400!important;color:#486581!important}
+    [data-template-id="room-label"]{font-size:16px!important;font-weight:700!important;color:#102a43!important}
+    [data-template-id="screen-banner"]{color:#0f5f59!important;background-color:#dff6f2!important}
+    [data-template-id="screen-banner-text"]{font-size:16px!important;font-weight:700!important;color:#0f5f59!important}
+    [data-template-id="seat-eyebrow"]{font-size:16px!important;font-weight:700!important;color:#0f766e!important;letter-spacing:0.08em!important}
+    [data-template-id="seat-title"]{font-size:24px!important;font-weight:800!important;color:#082f49!important}
+    [data-template-id="selection-label"]{font-size:16px!important;font-weight:700!important;color:#ffffff!important}
+    [data-template-id="selection-panel"]{color:#ffffff!important;background-color:#082f49!important}
+    [data-template-id="start-label"]{font-size:16px!important;font-weight:700!important;color:#102a43!important}
+    [data-template-id="student-label"]{font-size:16px!important;font-weight:700!important;color:#102a43!important}
+    [data-template-id="ticket-card"]{background-color:#ffffff!important}
+    [data-template-id="ticket-eyebrow"]{font-size:16px!important;font-weight:700!important;color:#0f766e!important;letter-spacing:0.08em!important}
+    [data-template-id="ticket-title"]{font-size:19px!important;font-weight:800!important;color:#082f49!important}
+    [data-template-id="timer-label"]{font-size:16px!important;font-weight:700!important;color:#ffffff!important}
+    [data-template-id="timer-panel"]{color:#ffffff!important;background-color:#082f49!important}
+    [data-template-id="upload-button"]{color:#0c4a6e!important;background-color:#ffffff!important}
+    [data-template-id="upload-button-label"]{font-size:16px!important;font-weight:700!important;color:#0c4a6e!important}
+  </style>
+  <style>
+    /* ===== ปรับปรุงรอบที่ 2 ===== */
+    /* จุดที่ 1 · ผังที่นั่ง: ทางเดิน 2 ช่องแบ่ง 3 โซน, สีสถานะต่างกันชัด, ตัวอักษรแถวตรึงไว้ตอนเลื่อน */
+    .seat-grid{grid-template-columns:repeat(5,34px) 16px repeat(10,34px) 16px repeat(5,34px)}
+    @media(min-width:640px){.seat-grid{grid-template-columns:repeat(5,37px) 18px repeat(10,37px) 18px repeat(5,37px)}}
+    .aisle{display:block}
+    .seat.available{color:#7b95a3}
+    .seat.reserved{border-color:#94a3b8;background:#94a3b8 repeating-linear-gradient(45deg,rgba(255,255,255,.22) 0 4px,transparent 4px 8px);color:#fff}
+    .seat.checked{border-color:#15803d;background:#16a34a;color:#fff;font-size:0}
+    .seat.checked::after{content:"✓";font-size:15px;line-height:1}
+    #left-labels{position:sticky;left:0;z-index:5;background:#fff;box-shadow:6px 0 6px -6px rgba(8,47,73,.3)}
+    .legend-count{margin-left:4px;padding:0 7px;border-radius:999px;background:#eef4f5;color:#102a43;font-size:12px;font-weight:800}
+    /* จุดที่ 2 · บอกเหตุผลทุกครั้งที่ยังกดเช็คชื่อไม่ได้ */
+    .checkin-hint{margin:4px 0 10px;padding:10px 14px;border-radius:12px;background:#fff7ed;color:#9a3412;font-size:14px;font-weight:600}
+    .checkin-hint.good{background:#ecfdf5;color:#15803d}
+    .checkin-hint:empty{display:none}
+  </style>
+ </head>
+ <body data-template-id="__page-root">
+  <div class="app-shell">
+   <header data-template-id="header-section" class="canva-header sticky top-0 z-30 border-b border-slate-200/80 backdrop-blur">
+    <div class="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
+     <button id="brand-home" type="button" class="flex min-h-[44px] items-center gap-2 text-left" aria-label="กลับหน้าแรก"> <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-[#0f766e] text-white"><i data-lucide="armchair" class="h-5 w-5"></i></span> <span data-template-id="brand-name" class="canva-text font-extrabold">Booking Seat</span> </button> <span data-template-id="header-tag" class="canva-tag hidden rounded-full px-3 py-1 text-xs font-bold sm:inline-flex">ระบบจองที่นั่งเรียน</span>
+    </div>
+   </header>
+   <main>
+    <section id="landing-screen" class="screen active">
+     <div class="relative min-h-[calc(100*min(var(--vh,1vh),1vh)-64px)] overflow-hidden bg-[#082f49]">
+      <img data-template-id="hero-image" loading="lazy" class="canva-image hero-photo absolute inset-0 h-full w-full object-cover" src="https://images.pexels.com/photos/36834057/pexels-photo-36834057.jpeg" alt="Spacious lecture hall with blue seats and desks ready for students.">
+      <div class="hero-pattern absolute inset-0"></div>
+      <div class="relative mx-auto grid min-h-[calc(100*min(var(--vh,1vh),1vh)-64px)] max-w-6xl items-center gap-8 px-4 py-12 sm:px-6 sm:py-20 lg:grid-cols-[1.1fr_.9fr]">
+       <div class="text-white">
+        <p data-template-id="hero-eyebrow" class="canva-text eyebrow mb-4">SEAT RESERVATION</p>
+        <h1 data-template-id="hero-title" class="canva-text max-w-2xl text-3xl font-extrabold leading-tight sm:text-5xl">เลือกที่นั่งเรียนของคุณอย่างมั่นใจ</h1>
+        <p data-template-id="hero-description" class="canva-text body-copy mt-5 max-w-xl">จองที่นั่ง ตรวจสอบสถานะ และเช็คชื่อได้ในที่เดียว พร้อมบัตรจองสำหรับยืนยันสิทธิ์ของคุณ</p><button id="start-booking" data-template-id="hero-cta" type="button" class="canva-button btn btn-accent mt-6 inline-flex items-center gap-2"> <span data-template-id="hero-cta-label" class="canva-text">เริ่มจองที่นั่ง</span><i data-lucide="arrow-right" class="h-5 w-5"></i> </button>
+       </div>
+       <aside data-template-id="hero-card" class="canva-card rounded-3xl p-6 shadow-2xl">
+        <p data-template-id="hero-card-label" class="canva-text font-bold">ตัวอย่างสถานะที่นั่ง</p>
+        <div class="mt-5 grid grid-cols-5 gap-2" aria-hidden="true">
+         <span class="h-8 rounded bg-[#dff6f2]"></span><span class="h-8 rounded bg-[#dff6f2]"></span><span class="h-8 rounded bg-[#fbbf24]"></span><span class="h-8 rounded bg-[#94a3b8]"></span><span class="h-8 rounded bg-[#16a34a]"></span> <span class="h-8 rounded bg-[#dff6f2]"></span><span class="h-8 rounded bg-[#94a3b8]"></span><span class="h-8 rounded bg-[#dff6f2]"></span><span class="h-8 rounded bg-[#dff6f2]"></span><span class="h-8 rounded bg-[#dff6f2]"></span>
+        </div>
+        <p data-template-id="hero-card-note" class="canva-text mt-5 border-t border-slate-100 pt-4 text-sm leading-relaxed">เลือกที่นั่งว่าง แล้วระบบจะสร้างบัตรจองพร้อม QR code ให้ทันที</p>
+       </aside>
+      </div>
+     </div>
+    </section>
+    <section id="form-screen" class="screen">
+     <div class="page-pad mx-auto max-w-3xl">
+      <button id="back-landing" type="button" class="inline-flex min-h-[44px] items-center gap-2 font-bold text-[#0c4a6e]"><i data-lucide="arrow-left" class="h-4 w-4"></i><span data-template-id="back-label" class="canva-text">กลับหน้าแรก</span></button>
+      <p data-template-id="form-eyebrow" class="canva-text eyebrow mt-5">STEP 1 · ข้อมูลการเรียน</p>
+      <h2 data-template-id="form-title" class="canva-text page-title mt-2">กรอกข้อมูลก่อนเลือกที่นั่ง</h2>
+      <p data-template-id="form-description" class="canva-text body-copy mt-2 max-w-2xl">ข้อมูลนี้จะใช้สำหรับตรวจสอบการจองและเช็คชื่อในรอบเรียนของคุณ</p>
+      <form id="booking-form" class="mt-6 rounded-3xl border border-slate-100 bg-white p-5 shadow-sm sm:p-8">
+       <div class="grid gap-4 sm:grid-cols-2">
+        <div><label data-template-id="prefix-label" class="canva-text mb-2 block text-sm font-bold" for="prefix">คำนำหน้าชื่อ</label><select id="prefix" class="input-field"><option>นาย</option><option>นางสาว</option><option>นาง</option></select>
+        </div>
+        <div><label data-template-id="name-label" class="canva-text mb-2 block text-sm font-bold" for="full-name">ชื่อ–สกุล</label><input id="full-name" type="text" class="input-field" required>
+        </div>
+        <div><label data-template-id="student-label" class="canva-text mb-2 block text-sm font-bold" for="student-id">รหัสนักศึกษา 10 หลัก</label><input id="student-id" type="text" inputmode="numeric" maxlength="11" class="input-field" required>
+        </div>
+        <div><label data-template-id="course-label" class="canva-text mb-2 block text-sm font-bold" for="course-name">รายวิชา</label><input id="course-name" type="text" list="course-options" class="input-field" required><datalist id="course-options"><option value="Learning Skill Development (EN001100)"></option><option value="Computational &amp; Statistical Thinking for ABCD (GE341511)"></option><option value="กิจกรรมพัฒนานักศึกษา"></option></datalist>
+        </div>
+        <div><label data-template-id="room-label" class="canva-text mb-2 block text-sm font-bold" for="room">ห้องเรียน</label><select id="room" class="input-field"><option>EN18410</option><option>EN18411</option><option>EN18412</option></select>
+        </div>
+        <div><label data-template-id="date-label" class="canva-text mb-2 block text-sm font-bold" for="class-date">วันที่เรียน</label><input id="class-date" type="date" class="input-field" required>
+        </div>
+        <div><label data-template-id="start-label" class="canva-text mb-2 block text-sm font-bold" for="start-time">เวลาเริ่มเรียน</label><input id="start-time" type="time" value="14:30" class="input-field" required>
+        </div>
+        <div><label data-template-id="end-label" class="canva-text mb-2 block text-sm font-bold" for="end-time">เวลาสิ้นสุดการเรียน</label><input id="end-time" type="time" value="17:30" class="input-field" required>
+        </div>
+       </div>
+       <p id="form-message" class="status-message mt-4 text-sm font-semibold" aria-live="polite"></p><button id="form-submit" data-template-id="form-submit" type="submit" class="canva-button btn btn-primary mt-1 inline-flex w-full items-center justify-center gap-2 sm:w-auto"><span data-template-id="form-submit-label" class="canva-text">ไปเลือกที่นั่ง</span><i data-lucide="layout-grid" class="h-5 w-5"></i></button>
+      </form>
+     </div>
+    </section>
+    <section id="seat-screen" class="screen">
+     <div class="page-pad mx-auto max-w-6xl">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+       <div>
+        <p data-template-id="seat-eyebrow" class="canva-text eyebrow">STEP 2 · เลือกที่นั่ง</p>
+        <h2 data-template-id="seat-title" class="canva-text page-title mt-2">เลือกที่นั่งของคุณ</h2>
+        <p id="session-summary" class="body-copy mt-2 text-slate-600"></p>
+       </div><button id="edit-details" data-template-id="edit-details-button" type="button" class="canva-button btn btn-secondary inline-flex min-h-[44px] items-center gap-2 px-4 py-2 text-sm"><i data-lucide="pencil" class="h-4 w-4"></i><span data-template-id="edit-details-label" class="canva-text">แก้ไขข้อมูล</span></button>
+      </div>
+      <div class="mt-6 grid gap-6 lg:grid-cols-[1fr_310px]">
+       <section class="overflow-hidden rounded-3xl border border-slate-100 bg-white p-4 shadow-sm sm:p-6">
+        <div class="mb-4 flex flex-wrap gap-x-4 gap-y-2 text-xs font-bold text-slate-600">
+         <span class="flex items-center gap-1.5"><i class="h-3 w-3 rounded border border-slate-300 bg-white"></i><span data-template-id="legend-open" class="canva-text">ว่าง</span><b id="n-open" class="legend-count">0</b></span> <span class="flex items-center gap-1.5"><i class="h-3 w-3 rounded bg-[#94a3b8]"></i><span data-template-id="legend-booked" class="canva-text">จองแล้ว</span><b id="n-booked" class="legend-count">0</b></span> <span class="flex items-center gap-1.5"><i class="h-3 w-3 rounded bg-[#16a34a]"></i><span data-template-id="legend-checked" class="canva-text">เช็คชื่อแล้ว</span><b id="n-checked" class="legend-count">0</b></span> <span class="flex items-center gap-1.5"><i class="h-3 w-3 rounded bg-[#fbbf24]"></i><span data-template-id="legend-selected" class="canva-text">เลือกอยู่</span></span> <span class="flex items-center gap-1.5"><i class="h-3 w-3 rounded bg-[#0f766e]"></i><span data-template-id="legend-mine" class="canva-text">ที่นั่งของฉัน</span></span>
+        </div>
+        <div data-template-id="screen-banner" class="canva-banner mb-5 rounded-xl py-3 text-center font-bold"><span data-template-id="screen-banner-text" class="canva-text">ด้านหน้าห้องเรียน</span>
+        </div>
+        <div class="seat-scroll overflow-x-auto pb-3">
+         <div class="flex w-max gap-3">
+          <div id="left-labels" class="mt-8 flex flex-col gap-[7px]"></div>
+          <div>
+           <div id="number-labels" class="seat-grid mb-2"></div>
+           <div id="seat-grid" class="space-y-[7px]" aria-label="ผังที่นั่ง A ถึง O"></div>
+          </div>
+          <div id="right-labels" class="mt-8 flex flex-col gap-[7px]"></div>
+         </div>
+        </div>
+       </section>
+       <aside data-template-id="selection-panel" class="canva-panel h-fit rounded-3xl p-6">
+        <p data-template-id="selection-label" class="canva-text text-sm font-bold opacity-80">ที่นั่งที่เลือก</p>
+        <p id="selected-seat-display" class="mt-2 text-4xl font-extrabold">—</p>
+        <p id="selection-help" class="mt-4 text-sm leading-relaxed"></p>
+        <p id="seat-message" class="status-message mt-4 text-sm font-semibold" aria-live="polite"></p><button id="confirm-seat" data-template-id="confirm-seat-button" type="button" class="canva-button btn btn-accent mt-2 w-full">ยืนยันการจองที่นั่ง</button> <button id="cancel-booking" data-template-id="cancel-seat-button" type="button" class="canva-button btn btn-secondary mt-3 hidden w-full">ยกเลิกการจอง</button> <button id="go-checkin" data-template-id="go-checkin-button" type="button" class="canva-button btn btn-primary mt-3 hidden w-full">ไปหน้าเช็คชื่อ</button>
+       </aside>
+      </div>
+      <section id="ticket-card" data-template-id="ticket-card" class="canva-card mt-6 hidden rounded-3xl p-6 shadow-lg sm:p-8">
+       <div class="grid items-center gap-6 sm:grid-cols-[1fr_auto]">
+        <div>
+         <p data-template-id="ticket-eyebrow" class="canva-text eyebrow">BOOKING TICKET</p>
+         <h3 data-template-id="ticket-title" class="canva-text mt-2 text-xl font-extrabold">บัตรจองที่นั่งของคุณ</h3>
+         <div id="ticket-details" class="mt-5 grid grid-cols-2 gap-3 text-sm"></div>
+        </div>
+        <div class="mx-auto w-fit rounded-2xl bg-white p-3">
+         <div id="qr-code" aria-label="QR code สำหรับการจอง"></div>
+        </div>
+       </div>
+      </section>
+     </div>
+    </section>
+    <section id="checkin-screen" class="screen">
+     <div class="page-pad mx-auto max-w-4xl">
+      <button id="back-seats" type="button" class="inline-flex min-h-[44px] items-center gap-2 font-bold text-[#0c4a6e]"><i data-lucide="arrow-left" class="h-4 w-4"></i><span data-template-id="back-seat-label" class="canva-text">กลับไปหน้าที่นั่ง</span></button>
+      <p data-template-id="checkin-eyebrow" class="canva-text eyebrow mt-5">STEP 3 · เช็คชื่อ</p>
+      <h2 data-template-id="checkin-title" class="canva-text page-title mt-2">ยืนยันตัวตนเพื่อเช็คชื่อ</h2>
+      <p id="checkin-booking-summary" class="body-copy mt-2 text-slate-600"></p>
+      <div class="mt-6 grid gap-6 md:grid-cols-2">
+       <section class="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+        <p data-template-id="proof-label" class="canva-text font-bold">แนบภาพหลักฐาน</p><label for="proof-image" class="proof-preview mt-4 flex h-52 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-[#75bbb5] bg-[#f0fcfa] px-4 text-center"><i data-lucide="image-plus" class="h-8 w-8 text-[#0f766e]"></i><span data-template-id="proof-upload-label" class="canva-text mt-3 font-bold">แตะเพื่อเลือกรูปภาพ</span><span data-template-id="proof-upload-note" class="canva-text mt-1 text-xs">รองรับไฟล์รูปภาพขนาดไม่เกิน 15 MB</span></label> <input id="proof-image" class="sr-only" type="file" accept="image/*" aria-label="เลือกรูปภาพหลักฐาน"><input id="proof-camera" class="sr-only" type="file" accept="image/*" capture="user" aria-label="ถ่ายภาพหลักฐาน">
+        <div class="mt-4 grid grid-cols-2 gap-3"><button id="open-camera" data-template-id="camera-button" type="button" class="canva-button btn btn-primary inline-flex items-center justify-center gap-2 px-3"><i data-lucide="camera" class="h-4 w-4"></i><span data-template-id="camera-button-label" class="canva-text">ถ่ายภาพ</span></button><button id="open-upload" data-template-id="upload-button" type="button" class="canva-button btn btn-secondary inline-flex items-center justify-center gap-2 px-3"><i data-lucide="upload" class="h-4 w-4"></i><span data-template-id="upload-button-label" class="canva-text">อัปโหลดรูป</span></button>
+        </div>
+        <p id="proof-status" class="mt-3 text-xs font-semibold text-slate-500"></p><p class="mt-2 text-xs text-slate-500">รูปใช้ยืนยันการเข้าเรียนเท่านั้น เก็บในโฟลเดอร์ส่วนตัวของกลุ่ม และลบเมื่อจบภาคการศึกษา</p>
+       </section>
+       <section data-template-id="timer-panel" class="canva-panel flex flex-col items-center justify-center rounded-3xl p-6 text-center">
+        <p data-template-id="timer-label" class="canva-text font-bold opacity-80">เวลาสำหรับเช็คชื่อ</p>
+        <div class="count-ring mt-4"><span id="countdown" class="text-3xl font-extrabold">--:--</span><span data-template-id="minutes-label" class="canva-text text-xs font-bold">นาที : วินาที</span>
+        </div>
+        <p id="system-clock" class="mt-5 font-bold"></p>
+        <p id="checkin-window" class="mt-2 text-xs font-semibold opacity-80"></p>
+       </section>
+      </div>
+      <p id="checkin-message" class="status-message mt-5 text-sm font-semibold" aria-live="polite"></p><p id="checkin-hint" class="checkin-hint" aria-live="polite"></p><button id="checkin-button" data-template-id="checkin-button" type="button" disabled class="canva-button btn btn-primary mt-1 w-full">ยืนยันการเช็คชื่อ</button>
+     </div>
+    </section>
+   </main>
+  </div>
+  <template id="detail-template">
+   <div class="rounded-xl bg-slate-50 p-3">
+    <p class="text-xs text-slate-500" data-role="label"></p>
+    <p class="mt-1 font-bold" data-role="value"></p>
+   </div>
+  </template>
+  <script>
+    const rows=Array.from({length:15},(_,i)=>String.fromCharCode(65+i));
+    const $=id=>document.getElementById(id);
+    const state={records:[],form:null,selectedSeat:"",currentBooking:null,proofReady:false,ready:false,ticketSignature:"",proofData:"",proofBusy:false};
+    const CHECKIN_EARLY_MS=600000; /* เปิดให้เช็คชื่อก่อนเวลาเริ่มเรียน 10 นาที */
+    const bkkHM=d=>d.toLocaleTimeString("th-TH",{timeZone:"Asia/Bangkok",hour12:false,hour:"2-digit",minute:"2-digit"});
+    const mmss=ms=>ms>=5940000?Math.floor(ms/3600000)+" ชม.":String(Math.floor(ms/60000)).padStart(2,"0")+":"+String(Math.floor(ms%60000/1000)).padStart(2,"0");
+    const pad=v=>String(v).padStart(2,"0");
+    const hhmm=v=>{const m=String(v||"").match(/(\d{1,2}):(\d{2})/);return m?pad(m[1])+":"+m[2]:""};
+    const dateKey=v=>String(v||"").slice(0,10);
+    const normId=v=>{const x=String(v||"").replace(/\D/g,"");return x.length===10?x.slice(0,9)+"-"+x.slice(9):x};
+    const thaiISO=()=>{const d=new Date(Date.now()+25200000);return d.getUTCFullYear()+"-"+pad(d.getUTCMonth()+1)+"-"+pad(d.getUTCDate())+"T"+pad(d.getUTCHours())+":"+pad(d.getUTCMinutes())+":"+pad(d.getUTCSeconds())};
+    const thaiClock=()=>new Date().toLocaleTimeString("th-TH",{timeZone:"Asia/Bangkok",hour12:false,hour:"2-digit",minute:"2-digit",second:"2-digit"});
+    const thaiDate=v=>{const d=new Date(dateKey(v)+"T00:00:00+07:00");return isNaN(d)?"—":d.toLocaleDateString("th-TH",{timeZone:"Asia/Bangkok",day:"numeric",month:"short",year:"numeric"})};
+    const thaiDateTime=v=>{const raw=String(v||"");const d=new Date(raw&&!/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw)?raw+"+07:00":raw);return !v||isNaN(d)?"—":d.toLocaleString("th-TH",{timeZone:"Asia/Bangkok",day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit",hour12:false})+" น."};
+    function msg(id,text,good=false){const e=$(id);e.textContent=text;e.className="status-message mt-4 text-sm font-semibold "+(good?"text-emerald-700":"text-rose-700")}
+    function screen(id){document.querySelectorAll(".screen").forEach(x=>x.classList.remove("active"));$(id).classList.add("active");window.scrollTo({top:0,behavior:"smooth"})}
+    function matches(r){return state.form&&String(r.course_name||"").trim()===state.form.course&&r.room===state.form.room&&dateKey(r.class_date)===state.form.date&&hhmm(r.start_time)===state.form.start}
+    function windowFor(r){if(!r)return null;const date=dateKey(r.class_date),start=hhmm(r.start_time);if(!date||!start)return null;const d=new Date(date+"T"+start+":00+07:00");return isNaN(d)?null:{start:d,open:new Date(d.getTime()-CHECKIN_EARLY_MS),close:new Date(d.getTime()+900000)}}
+    function buildSeats(){
+      ["number-labels","left-labels","right-labels","seat-grid"].forEach(id=>$(id).replaceChildren());
+      for(let n=1;n<=20;n++){const s=document.createElement("span");s.className="text-center text-xs font-bold text-slate-500";s.textContent=n;$("number-labels").appendChild(s);if(n===5||n===15){const a=document.createElement("span");a.className="aisle";$("number-labels").appendChild(a)}}
+      rows.forEach(row=>{
+        ["left-labels","right-labels"].forEach(id=>{const l=document.createElement("div");l.className="row-label";l.textContent=row;$(id).appendChild(l)});
+        const line=document.createElement("div");line.className="seat-grid";
+        for(let n=1;n<=20;n++){const seat=row+String(n).padStart(2,"0"),b=document.createElement("button");b.type="button";b.dataset.seat=seat;b.textContent=seat;b.className="seat available";b.setAttribute("aria-label","เลือกที่นั่ง "+seat);b.addEventListener("click",()=>selectSeat(seat));line.appendChild(b);if(n===5||n===15){const a=document.createElement("span");a.className="aisle";line.appendChild(a)}}
+        $("seat-grid").appendChild(line);
+      });
+    }
+    function own(){return state.records.filter(r=>matches(r)&&normId(r.student_id)===normId(state.form?.student)).sort((a,b)=>String(a.booking_time).localeCompare(String(b.booking_time)))}
+    function sync(){state.currentBooking=own()[0]||null;if(state.currentBooking)state.selectedSeat=state.currentBooking.seat_number}
+    function renderSeats(){
+      const taken=new Map(state.records.filter(matches).map(r=>[String(r.seat_number).trim(),r])),my=normId(state.form?.student);
+      document.querySelectorAll(".seat").forEach(b=>{const r=taken.get(b.dataset.seat);b.disabled=false;b.className="seat";if(r){const mine=normId(r.student_id)===my;b.classList.add(r.booking_status==="checked_in"?"checked":mine?"mine":"reserved");b.disabled=true}else b.classList.add(b.dataset.seat===state.selectedSeat?"selected":"available")});const cnt={open:0,booked:0,checked:0};document.querySelectorAll(".seat").forEach(b=>{if(b.classList.contains("checked"))cnt.checked++;else if(b.disabled)cnt.booked++;else cnt.open++});["open","booked","checked"].forEach(k=>{const e=$("n-"+k);if(e)e.textContent=cnt[k]});
+    }
+    function selectSeat(seat){if(state.currentBooking)return msg("seat-message","คุณมีการจองอยู่แล้ว หากต้องการเปลี่ยนที่นั่ง กรุณายกเลิกการจองก่อน");state.selectedSeat=seat;$("selected-seat-display").textContent=seat;$("selection-help").textContent="ตรวจสอบที่นั่งที่เลือก แล้วกดยืนยันเพื่อบันทึกการจอง";$("confirm-seat").disabled=false;msg("seat-message","");renderSeats()}
+    function renderTicket(){
+      const r=state.currentBooking;if(!r)return;const sig=[r.__backendId,r.seat_number,r.booking_status,r.checkin_time].join("|");if(sig===state.ticketSignature)return;state.ticketSignature=sig;$("ticket-card").classList.remove("hidden");$("ticket-details").replaceChildren();$("qr-code").replaceChildren();
+      [["ชื่อ",r.prefix+" "+r.full_name],["รหัสนักศึกษา",r.student_id],["ที่นั่ง",r.seat_number],["ห้อง",r.room],["วันเรียน",thaiDate(r.class_date)],["เวลาเรียน",hhmm(r.start_time)+"–"+hhmm(r.end_time)+" น."],["เวลาที่จอง",thaiDateTime(r.booking_time)]].concat(r.booking_status==="checked_in"?[["เวลาเช็คชื่อ",thaiDateTime(r.checkin_time)]]:[]).forEach(([l,v])=>{const d=$("detail-template").content.cloneNode(true);d.querySelector('[data-role="label"]').textContent=l;d.querySelector('[data-role="value"]').textContent=v;$("ticket-details").appendChild(d)});
+      if(window.QRCode)new QRCode($("qr-code"),{text:JSON.stringify({seat:r.seat_number,student:r.student_id,room:r.room,date:dateKey(r.class_date),start:hhmm(r.start_time)}),width:130,height:130,colorDark:"#082f49",colorLight:"#ffffff"});
+    }
+    function actions(){
+      const r=state.currentBooking,checked=r?.booking_status==="checked_in";$("confirm-seat").classList.toggle("hidden",!!r);$("cancel-booking").classList.toggle("hidden",!r||checked);$("go-checkin").classList.toggle("hidden",!r||checked);
+      if(!r){$("selected-seat-display").textContent=state.selectedSeat||"—";$("selection-help").textContent="เลือกที่นั่งจากผังด้านซ้าย";return}
+      $("selected-seat-display").textContent=r.seat_number;$("selection-help").textContent=checked?"เช็คชื่อสำเร็จแล้ว เมื่อ "+thaiDateTime(r.checkin_time):(()=>{const w=windowFor(r);return w?"บัตรจองพร้อมใช้งาน · เช็คชื่อได้ "+bkkHM(w.open)+"–"+bkkHM(w.close)+" น. (ก่อนเริ่มเรียน 10 นาที ถึงหลังเริ่มเรียน 15 นาที)":"บัตรจองพร้อมใช้งาน"})();renderTicket();
+    }
+    function refresh(){const r=state.currentBooking,w=windowFor(r),now=Date.now();let ok=false,good=false,hint="";if(!r)hint="ยังไม่มีการจอง กลับไปเลือกที่นั่งก่อน";else if(r.booking_status==="checked_in"){hint="เช็คชื่อเรียบร้อยแล้ว";good=true}else if(!r.__backendId)hint="กำลังบันทึกการจอง รอสักครู่";else if(!w)hint="วันหรือเวลาเรียนในการจองไม่ถูกต้อง กรุณากดแก้ไขข้อมูล";else if(now<w.open)hint="ยังไม่ถึงเวลาเช็คชื่อ · เปิดให้เช็คชื่อ "+bkkHM(w.open)+"–"+bkkHM(w.close)+" น.";else if(now>w.close)hint="หมดเวลาเช็คชื่อแล้ว (ปิดเมื่อ "+bkkHM(w.close)+" น.)";else if(state.proofBusy)hint="กำลังเตรียมรูปภาพ…";else if(!state.proofReady)hint="แนบภาพหลักฐานก่อน แล้วจึงกดเช็คชื่อได้";else{ok=true;good=true;hint="พร้อมเช็คชื่อ · กดปุ่มด้านล่างได้เลย (ภายใน "+bkkHM(w.close)+" น.)"}$("checkin-button").disabled=!ok;const e=$("checkin-hint");if(e){e.textContent=hint;e.className="checkin-hint"+(good?" good":"")}}
+    async function cancelExpired(){const r=state.currentBooking,w=windowFor(r);if(!r||r.booking_status==="checked_in"||!w||Date.now()<=w.close)return;const latest=state.records.find(x=>x.__backendId===r.__backendId);if(!latest)return;const result=await window.dataSdk.delete(latest);if(result.isOk){state.currentBooking=null;state.selectedSeat="";state.ticketSignature="";$("ticket-card").classList.add("hidden");renderSeats();actions();msg("seat-message","หมดเวลา 15 นาที ระบบยกเลิกการจองให้อัตโนมัติ")}}
+    function clock(){
+      $("system-clock").textContent="เวลา "+thaiClock();const r=state.currentBooking;if(!r){$("countdown").textContent="--:--";$("checkin-window").textContent="";refresh();return}if(r.booking_status==="checked_in"){$("countdown").textContent="สำเร็จ";$("checkin-window").textContent="เช็คชื่อเมื่อ "+thaiDateTime(r.checkin_time);refresh();return}
+      const w=windowFor(r);if(!w){refresh();return}const now=Date.now();if(now>w.close){$("countdown").textContent="หมดเวลา";$("checkin-window").textContent="ช่วงเวลาเช็คชื่อสิ้นสุดแล้ว";cancelExpired()}else if(now<w.open){const wait=w.open-now;$("countdown").textContent=mmss(wait);$("checkin-window").textContent="อีก "+Math.ceil(wait/60000)+" นาทีจะเปิดให้เช็คชื่อ · "+bkkHM(w.open)+"–"+bkkHM(w.close)+" น."}else{const left=w.close-now;$("countdown").textContent=mmss(left);$("checkin-window").textContent="เหลือเวลาสำหรับเช็คชื่ออีก "+Math.ceil(left/60000)+" นาที"}refresh();
+    }
+    function shrinkImage(src,max,q){return new Promise((ok,no)=>{const im=new Image();im.onload=()=>{const k=Math.min(1,max/Math.max(im.naturalWidth,im.naturalHeight)),c=document.createElement("canvas");c.width=Math.round(im.naturalWidth*k);c.height=Math.round(im.naturalHeight*k);c.getContext("2d").drawImage(im,0,0,c.width,c.height);ok(c.toDataURL("image/jpeg",q))};im.onerror=()=>no(new Error("decode"));im.src=src})}
+    async function proof(file){if(!file||!file.type.startsWith("image/"))return msg("checkin-message","กรุณาเลือกไฟล์รูปภาพเท่านั้น");if(file.size>15*1024*1024)return msg("checkin-message","รูปมีขนาดเกิน 15 MB กรุณาเลือกรูปที่เล็กลง");const h=document.querySelector(".proof-preview"),img=document.createElement("img"),url=URL.createObjectURL(file);img.src=url;img.alt="ภาพหลักฐานที่เลือก";h.replaceChildren(img);state.proofReady=false;state.proofData="";state.proofBusy=true;$("proof-status").textContent="กำลังย่อรูปให้เล็กลงก่อนส่ง…";refresh();try{state.proofData=await shrinkImage(url,1024,0.72);state.proofReady=true;$("proof-status").textContent="แนบรูปแล้ว ("+Math.round(state.proofData.length*0.75/1024)+" KB) · รูปจะถูกส่งไปเก็บพร้อมการเช็คชื่อ";msg("checkin-message","แนบภาพแล้ว พร้อมเช็คชื่อ",true)}catch(e){$("proof-status").textContent="";msg("checkin-message","อ่านรูปนี้ไม่ได้ กรุณาถ่ายใหม่หรือเลือกรูปอื่น")}finally{state.proofBusy=false;refresh()}}
+    $("booking-form").addEventListener("submit",e=>{e.preventDefault();const date=$("class-date").value,start=hhmm($("start-time").value),end=hhmm($("end-time").value),name=$("full-name").value.trim(),course=$("course-name").value.trim(),digits=$("student-id").value.replace(/\D/g,"");if(!date||!start||!end||end<=start)return msg("form-message","กรุณาตรวจสอบวันและเวลาเรียนให้ถูกต้อง");if(!name||!course)return msg("form-message","กรุณากรอกชื่อ–สกุล และรายวิชาให้ครบ");if(digits.length!==10)return msg("form-message","รหัสนักศึกษาต้องเป็นตัวเลข 10 หลักเท่านั้น");state.form={prefix:$("prefix").value,name,student:normId(digits),course,room:$("room").value,date,start,end};try{localStorage.setItem("booking-seat-form-v1",JSON.stringify(state.form))}catch(e){}state.selectedSeat="";state.currentBooking=null;state.proofReady=false;state.proofData="";state.ticketSignature="";$("proof-status").textContent="";$("session-summary").textContent=course+" · "+state.form.room+" · "+thaiDate(date)+" · "+start+"–"+end+" น.";$("ticket-card").classList.add("hidden");$("confirm-seat").disabled=true;buildSeats();sync();renderSeats();actions();screen("seat-screen");if(state.currentBooking)msg("seat-message","พบการจองเดิมของคุณ: ที่นั่ง "+state.currentBooking.seat_number,true)});
+    $("confirm-seat").addEventListener("click",async()=>{if(!state.ready)return msg("seat-message","กำลังเชื่อมต่อข้อมูล กรุณารอสักครู่");if(!state.form||!state.selectedSeat||state.currentBooking)return;if(state.records.length>=999)return msg("seat-message","จำนวนรายการจองเต็ม 999 รายการแล้ว");if(state.records.some(r=>matches(r)&&String(r.seat_number).trim()===state.selectedSeat))return msg("seat-message","ที่นั่งนี้เพิ่งถูกจอง กรุณาเลือกที่นั่งอื่น");const b=$("confirm-seat");b.disabled=true;msg("seat-message","กำลังบันทึกการจอง...");const result=await window.dataSdk.create({student_id:state.form.student,prefix:state.form.prefix,full_name:state.form.name,course_name:state.form.course,room:state.form.room,class_date:state.form.date,start_time:state.form.start,end_time:state.form.end,seat_number:state.selectedSeat,booking_time:thaiISO(),booking_status:"booked",checkin_time:"",photo_url:""});if(!result.isOk){b.disabled=false;return msg("seat-message","บันทึกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง")}msg("seat-message","จองที่นั่งสำเร็จแล้ว ระบบกำลังอัปเดตบัตรจอง",true)});
+    $("cancel-booking").addEventListener("click",async()=>{const r=state.currentBooking;if(!r?.__backendId)return msg("seat-message","กำลังรอข้อมูลการจอง กรุณาลองใหม่สักครู่");const b=$("cancel-booking");b.disabled=true;msg("seat-message","กำลังยกเลิกการจอง...");const result=await window.dataSdk.delete(r);b.disabled=false;if(!result.isOk)return msg("seat-message","ยกเลิกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");state.currentBooking=null;state.selectedSeat="";state.ticketSignature="";$("ticket-card").classList.add("hidden");renderSeats();actions();msg("seat-message","ยกเลิกการจองแล้ว ที่นั่งกลับสู่ว่าง",true)});
+    $("open-camera").addEventListener("click",()=>$("proof-camera").click());$("open-upload").addEventListener("click",()=>$("proof-image").click());["proof-image","proof-camera"].forEach(id=>$(id).addEventListener("change",e=>{const f=e.target.files[0];e.target.value="";proof(f)}));
+    $("checkin-button").addEventListener("click",async()=>{const r=state.currentBooking;if(!r?.__backendId||!state.proofReady)return msg("checkin-message","กรุณารอข้อมูลการจองและแนบภาพยืนยันตัวตน");const latest=state.records.find(x=>x.__backendId===r.__backendId);if(!latest)return msg("checkin-message","ไม่พบข้อมูลการจองล่าสุด กรุณากลับไปหน้าที่นั่งแล้วลองใหม่");const b=$("checkin-button");b.disabled=true;msg("checkin-message","กำลังบันทึกการเช็คชื่อและส่งรูปหลักฐาน...");const updated={...latest,booking_status:"checked_in",checkin_time:thaiISO(),photo_url:latest.photo_url||""};const result=await window.dataSdk.update({...updated,photo_data:state.proofData});if(!result.isOk){b.disabled=false;return msg("checkin-message",result.error==="photo_failed"?"บันทึกรูปไม่สำเร็จ กรุณาลองใหม่อีกครั้ง":"เช็คชื่อไม่สำเร็จ กรุณาลองใหม่อีกครั้ง")}state.currentBooking=state.records.find(x=>x.__backendId===updated.__backendId)||updated;state.ticketSignature="";state.proofData="";$("proof-status").textContent=state.currentBooking.photo_url?"เช็คชื่อเรียบร้อยแล้ว · บันทึกรูปหลักฐานเรียบร้อย":"เช็คชื่อเรียบร้อยแล้ว · โหมดทดลอง ยังไม่ได้ส่งรูปไปเก็บ (ต้องเชื่อม Google ชีตก่อน)";renderSeats();actions();clock();msg("checkin-message","เช็คชื่อสำเร็จแล้ว เวลา "+thaiClock()+" น.",true)});
+    const handler={onDataChanged(data){state.records=Array.isArray(data)?data:[];if(!state.form)return;sync();renderSeats();actions();clock()}};
+    async function init(){try{const r=await window.dataSdk.init(handler);state.ready=!!r?.isOk;if(!state.ready)msg("form-message","ไม่สามารถเชื่อมต่อข้อมูลการจองได้ในขณะนี้ กรุณาลองใหม่ภายหลัง")}catch(e){state.ready=false;msg("form-message","ไม่สามารถเชื่อมต่อข้อมูลการจองได้ในขณะนี้ กรุณาลองใหม่ภายหลัง")}}
+    $("class-date").value=new Date(Date.now()+25200000).toISOString().slice(0,10);$("start-booking").addEventListener("click",()=>screen("form-screen"));$("brand-home").addEventListener("click",()=>screen("landing-screen"));$("back-landing").addEventListener("click",()=>screen("landing-screen"));$("edit-details").addEventListener("click",()=>screen("form-screen"));$("back-seats").addEventListener("click",()=>screen("seat-screen"));$("go-checkin").addEventListener("click",()=>{if(!state.currentBooking)return;$("checkin-booking-summary").textContent="ที่นั่ง "+state.currentBooking.seat_number+" · "+state.currentBooking.course_name+" · "+state.currentBooking.room;screen("checkin-screen");clock()});
+    setInterval(clock,1000);clock();init();lucide.createIcons();
+  </script>
+   <script>
+    /* จำข้อมูลที่กรอกล่าสุดไว้ในเครื่อง รีเฟรชหน้าแล้วไม่ต้องกรอกใหม่ */
+    (function(){try{const f=JSON.parse(localStorage.getItem("booking-seat-form-v1")||"null");if(!f)return;const today=new Date(Date.now()+25200000).toISOString().slice(0,10);
+      $("prefix").value=f.prefix||"นาย";$("full-name").value=f.name||"";$("student-id").value=String(f.student||"").replace(/\D/g,"");$("course-name").value=f.course||"";$("room").value=f.room||"EN18410";
+      if(f.date&&f.date>=today){$("class-date").value=f.date;$("start-time").value=f.start||"14:30";$("end-time").value=f.end||"17:30"}}catch(e){}})();
+  </script>
+ </body>
+</html>
